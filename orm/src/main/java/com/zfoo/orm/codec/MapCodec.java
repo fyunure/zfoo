@@ -11,6 +11,7 @@
  */
 package com.zfoo.orm.codec;
 
+import com.zfoo.protocol.util.ReflectionUtils;
 import org.bson.BsonReader;
 import org.bson.BsonType;
 import org.bson.BsonWriter;
@@ -61,7 +62,7 @@ public class MapCodec<K, V> implements Codec<Map<K, V>> {
 
     @Override
     public Map<K, V> decode(BsonReader reader, DecoderContext context) {
-        var map = new HashMap<K, V>();
+        var map = getInstance();
         reader.readStartDocument();
         while (BsonType.END_OF_DOCUMENT != reader.readBsonType()) {
             K key = keyDecodeFunction.apply(reader.readName());
@@ -82,5 +83,11 @@ public class MapCodec<K, V> implements Codec<Map<K, V>> {
         return encoderClass;
     }
 
+    private Map<K, V> getInstance() {
+        if (encoderClass.isInterface()) {
+            return new HashMap<>();
+        }
+        return ReflectionUtils.newInstance(encoderClass);
+    }
 }
 

@@ -25,7 +25,10 @@ import org.slf4j.LoggerFactory;
 import org.springframework.context.support.ClassPathXmlApplicationContext;
 
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CopyOnWriteArrayList;
 
 @Ignore
 public class MapTest {
@@ -51,6 +54,24 @@ public class MapTest {
         var entity = new MapEntity();
         entity.setId(id);
 
+        entity.setList(List.of(1, 2, 3));
+
+        CopyOnWriteArrayList<Integer> copyOnWriteArrayList = new CopyOnWriteArrayList<>();
+        copyOnWriteArrayList.add(1);
+        copyOnWriteArrayList.add(2);
+        entity.setCopyOnWriteArrayList(copyOnWriteArrayList);
+
+        ConcurrentHashMap<Long,Integer> concurrentHashMap=new ConcurrentHashMap<>();
+        concurrentHashMap.put(1L,1);
+        concurrentHashMap.put(2L,2);
+        entity.setConcurrentHashMap(concurrentHashMap);
+
+        ConcurrentHashMap<Long,ConcurrentHashMap<Integer,Integer>> concurrentHashMapConcurrentHashMap=new ConcurrentHashMap<>();
+
+        ConcurrentHashMap<Integer, Integer> conMap = new ConcurrentHashMap<>();
+        conMap.put(1,1);
+        concurrentHashMapConcurrentHashMap.putIfAbsent(1L,conMap);
+        entity.setConcurrentHashMapAndConcurrentHashMap(concurrentHashMapConcurrentHashMap);
         var bagMap = new HashMap<String, BagItem>();
         entity.setBagMap(bagMap);
 
