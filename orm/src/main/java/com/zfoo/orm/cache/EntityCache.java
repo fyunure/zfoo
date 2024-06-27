@@ -240,26 +240,33 @@ public class EntityCache<PK extends Comparable<PK>, E extends IEntity<PK>> imple
         doPersist(updateList, DEFAULT_BATCH_SIZE);
     }
 
+    @Override
+    public void persistAllBlock() {
+        var currentTime = TimeUtils.currentTimeMillis();
+        var updateList = new ArrayList<E>();
+        cache.forEach(new BiConsumer<PK, PNode<E>>() {
+            @Override
+            public void accept(PK pk, PNode<E> pnode) {
+                var entity = pnode.getEntity();
+                if (pnode.getModifiedTime() != pnode.getWriteToDbTime()) {
+                    pnode.resetTime(currentTime);
+                    updateList.add(entity);
+                }
+            }
+        });
+        doPersist(updateList, DEFAULT_BATCH_SIZE);
+    }
+
+
     // 游戏中80%都是执行更新的操作，这样做会极大的提高更新速度
     // 没有并发问题的entity指的是内部没有使用集合或者使用的集合全部支持并发操作
     // 没有并发问题的entity还是在异步线程池Event慢慢更新，有并发问题的entity才放到原来的update线程去更新（第一次update会记录entity所在线程）
     @Override
     public void persistAll() {
-        var currentTime = TimeUtils.currentTimeMillis();
         if (entityDef.isThreadSafe()) {
-            var updateList = new ArrayList<E>();
-            cache.forEach(new BiConsumer<PK, PNode<E>>() {
-                @Override
-                public void accept(PK pk, PNode<E> pnode) {
-                    var entity = pnode.getEntity();
-                    if (pnode.getModifiedTime() != pnode.getWriteToDbTime()) {
-                        pnode.resetTime(currentTime);
-                        updateList.add(entity);
-                    }
-                }
-            });
-            EventBus.asyncExecute(entityDef.getClazz().hashCode(), () -> doPersist(updateList, DEFAULT_BATCH_SIZE));
+            EventBus.asyncExecute(entityDef.getClazz().hashCode(), () -> persistAllBlock());
         } else {
+            var currentTime = TimeUtils.currentTimeMillis();
             // key为threadId
             var updateMap = new HashMap<Long, List<E>>();
             cache.forEach(new BiConsumer<PK, PNode<E>>() {
@@ -344,46 +351,42 @@ public class EntityCache<PK extends Comparable<PK>, E extends IEntity<PK>> imple
         var entityClass = (Class<E>) entityDef.getClazz();
         var ids = updateList.stream().map(it -> it.id()).toList();
 
-        try {
-            var dbList = OrmContext.getQuery(entityClass).in("_id", ids).queryAll();
-            var dbMap = dbList.stream().collect(Collectors.toMap(key -> key.id(), value -> value));
-            for (var entity : updateList) {
-                var id = entity.id();
-                var dbEntity = dbMap.get(id);
+        var dbList = OrmContext.getQuery(entityClass).in("_id", ids).queryAll();
+        var dbMap = dbList.stream().collect(Collectors.toMap(key -> key.id(), value -> value));
+        for (var entity : updateList) {
+            var id = entity.id();
+            var dbEntity = dbMap.get(id);
 
-                if (dbEntity == null) {
-                    cache.remove(entity.id());
-                    logger.warn("[database:{}] not found entity [id:{}]", entityClass.getSimpleName(), id);
-                    continue;
-                }
-
-                // 如果没有版本号，则直接更新数据库
-                if (entity.gvs() <= 0) {
-                    OrmContext.getAccessor().update(entity);
-                    continue;
-                }
-
-                // 如果版本号相同，说明已经更新到
-                if (dbEntity.gvs() == entity.gvs()) {
-                    continue;
-                }
-
-                // 如果数据库版本号较小，说明缓存的数据是最新的，直接写入数据库
-                if (dbEntity.gvs() < entity.gvs()) {
-                    OrmContext.getAccessor().update(entity);
-                    continue;
-                }
-
-                // 如果数据库版本号较大，说明缓存的数据不是最新的，直接清除缓存，下次重新加载
-                if (dbEntity.gvs() > entity.gvs()) {
-                    cache.remove(id);
-                    load(id);
-                    logger.warn("[database:{}] document of entity [id:{}] version [{}] is greater than cache [vs:{}]", entityClass.getSimpleName(), id, dbEntity.gvs(), entity.gvs());
-                    continue;
-                }
+            if (dbEntity == null) {
+                cache.remove(entity.id());
+                logger.warn("[database:{}] not found entity [id:{}]", entityClass.getSimpleName(), id);
+                continue;
             }
-        } catch (Throwable t) {
-            logger.error("persistAllAndCompare(): [{}] unknown error", entityClass.getSimpleName(), t);
+
+            // 如果没有版本号，则直接更新数据库
+            if (entity.gvs() <= 0) {
+                OrmContext.getAccessor().update(entity);
+                continue;
+            }
+
+            // 如果版本号相同，说明已经更新到
+            if (dbEntity.gvs() == entity.gvs()) {
+                continue;
+            }
+
+            // 如果数据库版本号较小，说明缓存的数据是最新的，直接写入数据库
+            if (dbEntity.gvs() < entity.gvs()) {
+                OrmContext.getAccessor().update(entity);
+                continue;
+            }
+
+            // 如果数据库版本号较大，说明缓存的数据不是最新的，直接清除缓存，下次重新加载
+            if (dbEntity.gvs() > entity.gvs()) {
+                cache.remove(id);
+                load(id);
+                logger.warn("[database:{}] document of entity [id:{}] version [{}] is greater than cache [vs:{}]", entityClass.getSimpleName(), id, dbEntity.gvs(), entity.gvs());
+                continue;
+            }
         }
     }
 

@@ -140,8 +140,12 @@ public abstract class EventBus {
     /**
      * Use the event thread specified by the hashcode to execute the task
      */
-    public static void asyncExecute(int executorHash, Runnable runnable) {
-        executors[Math.abs(executorHash % EXECUTORS_SIZE)].execute(ThreadUtils.safeRunnable(runnable));
+    public static void asyncExecute(int hash, Runnable runnable) {
+        executorOf(hash).execute(ThreadUtils.safeRunnable(runnable));
+    }
+
+    public static ExecutorService executorOf(int hash){
+        return executors[Math.abs(hash % EXECUTORS_SIZE)];
     }
 
     /**
