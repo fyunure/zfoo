@@ -11,9 +11,13 @@
  * See the License for the specific language governing permissions and limitations under the License.
  */
 
-package com.zfoo.orm.cache;
+package com.zfoo.orm.accessor;
 
+import com.mongodb.client.model.Filters;
+import com.zfoo.orm.OrmContext;
+import com.zfoo.orm.entity.UserEntity;
 import com.zfoo.protocol.util.ThreadUtils;
+import org.bson.Document;
 import org.junit.Ignore;
 import org.junit.Test;
 import org.springframework.context.support.ClassPathXmlApplicationContext;
@@ -22,22 +26,15 @@ import org.springframework.context.support.ClassPathXmlApplicationContext;
  * @author godotg
  */
 @Ignore
-public class OrmTest {
+public class DocumentTest {
 
     @Test
-    public void test() {
+    public void collectionTest() {
         var context = new ClassPathXmlApplicationContext("application.xml");
 
-        // 通过注解自动注入的方式去拿到UserEntity的EntityCaches
-        var userEntityCaches = context.getBean(UserManager.class).userEntityCaches;
-
-        for (int i = 1; i <= 10; i++) {
-            var entity = userEntityCaches.load((long) i);
-            entity.setE("update" + i);
-            entity.setC(i);
-            userEntityCaches.update(entity);
-        }
-
+        var collection = OrmContext.getOrmManager().getCollection(UserEntity.class);
+        var result = collection.updateOne(Filters.eq("_id", 1), new Document("$inc", new Document("c", 1L)));
+        System.out.println(result);
         ThreadUtils.sleep(Long.MAX_VALUE);
     }
 

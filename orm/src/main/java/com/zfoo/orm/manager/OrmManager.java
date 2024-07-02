@@ -85,15 +85,18 @@ public class OrmManager implements IOrmManager {
         this.ormConfig = ormConfig;
     }
 
+    @SuppressWarnings("unchecked")
     @Override
     public void initBefore() {
         var entityDefMap = entityClass();
 
-        for (var entityDef : entityDefMap.values()) {
+        for (var entry : entityDefMap.entrySet()) {
+            var entityClass = entry.getKey();
+            var entityDef = entry.getValue();
             @SuppressWarnings("rawtypes")
-            var entityCaches = new EntityCache(entityDef);
-            entityCachesMap.put(entityDef.getClazz(), entityCaches);
-            allEntityCachesUsableMap.put(entityDef.getClazz(), false);
+            var entityCaches = new EntityCache(entityClass, entityDef);
+            entityCachesMap.put(entityClass, entityCaches);
+            allEntityCachesUsableMap.put(entityClass, false);
         }
 
         var pojoCodecProvider = PojoCodecProvider.builder().automatic(true).register(new MapCodecProvider()).build();
@@ -134,10 +137,12 @@ public class OrmManager implements IOrmManager {
         mongodbDatabase = mongoClient.getDatabase(hostConfig.getDatabase());
 
         // 创建索引
-        for (var entityDef : entityDefMap.values()) {
+        for (var entry : entityDefMap.entrySet()) {
+            var entityClass = entry.getKey();
+            var entityDef = entry.getValue();
             var indexDefMap = entityDef.getIndexDefMap();
             if (CollectionUtils.isNotEmpty(indexDefMap)) {
-                var collection = getCollection(entityDef.getClazz());
+                var collection = mongodbDatabase.getCollection(collectionName(entityClass), entityClass);
                 for (var indexDef : indexDefMap.entrySet()) {
                     var fieldName = indexDef.getKey();
                     var index = indexDef.getValue();
@@ -169,7 +174,7 @@ public class OrmManager implements IOrmManager {
             if (CollectionUtils.isNotEmpty(indexTextDefMap)) {
                 AssertionUtils.isTrue(indexTextDefMap.size() == 1
                         , StringUtils.format("A collection can have only one text index [{}]", JsonUtils.object2String(indexTextDefMap.keySet())));
-                var collection = getCollection(entityDef.getClazz());
+                var collection = mongodbDatabase.getCollection(collectionName(entityClass), entityClass);
                 for (var indexTextDef : indexTextDefMap.entrySet()) {
                     var fieldName = indexTextDef.getKey();
                     var hasIndex = false;
@@ -235,7 +240,7 @@ public class OrmManager implements IOrmManager {
     }
 
     @Override
-    public <E extends IEntity<?>> IEntityCache<?, E> getEntityCaches(Class<E> clazz) {
+    public <PK extends Comparable<PK>, E extends IEntity<PK>> IEntityCache<PK, E> getEntityCaches(Class<E> clazz) {
         var usable = allEntityCachesUsableMap.get(clazz);
         if (usable == null) {
             throw new RunException("EntityCaches that do not have [] defined", clazz.getCanonicalName());
@@ -245,7 +250,7 @@ public class OrmManager implements IOrmManager {
             throw new RunException("Orm does not use [] EntityCacheAutowired annotation, which are released in advance to save memory", clazz.getCanonicalName());
         }
         @SuppressWarnings("unchecked")
-        var entityCache = (IEntityCache<?, E>) entityCachesMap.get(clazz);
+        var entityCache = (IEntityCache<PK, E>) entityCachesMap.get(clazz);
         return entityCache;
     }
 
@@ -254,14 +259,18 @@ public class OrmManager implements IOrmManager {
         return Collections.unmodifiableCollection(entityCachesMap.values());
     }
 
-    @Override
-    public <E extends IEntity<?>> MongoCollection<E> getCollection(Class<E> entityClazz) {
+    private String collectionName(Class<? extends IEntity<?>> entityClazz) {
         var collectionName = collectionNameMap.get(entityClazz);
         if (collectionName == null) {
             collectionName = StringUtils.substringBeforeLast(StringUtils.uncapitalize(entityClazz.getSimpleName()), "Entity");
             collectionNameMap.put(entityClazz, collectionName);
         }
-        return mongodbDatabase.getCollection(collectionName, entityClazz);
+        return collectionName;
+    }
+
+    @Override
+    public <PK extends Comparable<PK>, E extends IEntity<PK>> MongoCollection<E> getCollection(Class<E> entityClazz) {
+        return mongodbDatabase.getCollection(collectionName(entityClazz), entityClazz);
     }
 
 
@@ -396,7 +405,7 @@ public class OrmManager implements IOrmManager {
             indexTextDefMap.put(field.getName(), indexTextDef);
         }
 
-        return EntityDef.valueOf(idField, clazz, !hasUnsafeCollection, cacheStrategy.getSize(), cacheStrategy.getExpireMillisecond(), persisterStrategy, indexDefMap, indexTextDefMap);
+        return EntityDef.valueOf(!hasUnsafeCollection, cacheStrategy.getSize(), cacheStrategy.getExpireMillisecond(), persisterStrategy, indexDefMap, indexTextDefMap);
     }
 
     private void checkEntity(Class<?> clazz) {
@@ -407,7 +416,7 @@ public class OrmManager implements IOrmManager {
         // 校验id字段和id()方法的格式，一个Entity类只能有一个@Id注解
         var idFields = ReflectionUtils.getFieldsByAnnoInPOJOClass(clazz, Id.class);
         AssertionUtils.isTrue(ArrayUtils.isNotEmpty(idFields) && idFields.length == 1
-                , "The Entity[{}] must have only one Id annotation (if it is indeed marked with an Id annotation, be careful not to use the Stored Id annotation)", clazz.getSimpleName());
+                , "The Entity[{}] must have only one @Id annotation (if it is indeed marked with an Id annotation, be careful not to use the Stored Id annotation)", clazz.getSimpleName());
         var idField = idFields[0];
         // idField必须用private修饰
         AssertionUtils.isTrue(Modifier.isPrivate(idField.getModifiers()), "The id of the Entity[{}] must be private", clazz.getSimpleName());
@@ -450,32 +459,15 @@ public class OrmManager implements IOrmManager {
         AssertionUtils.isTrue(idFiledValue.equals(idMethodReturnValue), "The return value id [field:{}] of the Entity[{}] and the return value id [method:{}] are not equal, please check whether the id() method is implemented correctly"
                 , clazz.getSimpleName(), idFiledValue, idMethodReturnValue);
 
-        // 校验gvs()方法和svs()方法的格式
-        var gvsMethodOptional = Arrays.stream(ReflectionUtils.getAllMethods(clazz))
-                .filter(it -> it.getName().equals("gvs"))
-                .filter(it -> it.getParameterCount() <= 0)
-                .findFirst();
-
-        var svsMethodOptional = Arrays.stream(ReflectionUtils.getAllMethods(clazz))
-                .filter(it -> it.getName().equals("svs"))
-                .filter(it -> it.getParameterCount() == 1)
-                .filter(it -> it.getParameterTypes()[0].equals(long.class))
-                .findFirst();
-        // gvs和svs要实现都实现，不实现都不实现
-        if (gvsMethodOptional.isEmpty() || svsMethodOptional.isEmpty()) {
-            // 实体类Entity的gvs和svs方法要实现都实现，不实现都不实现
-            AssertionUtils.isTrue(gvsMethodOptional.isEmpty() && svsMethodOptional.isEmpty()
-                    , "The gvs and svs methods of the Entity[{}] should be implemented together", clazz.getSimpleName());
-            return;
+        // @Version标识的字段必须是long类型
+        var versionFields = ReflectionUtils.getFieldsByAnnoInPOJOClass(clazz, Version.class);
+        if (ArrayUtils.isNotEmpty(versionFields)) {
+            AssertionUtils.isTrue(versionFields.length == 1, "The Entity[{}] must have only one @Version annotation", clazz.getSimpleName());
+            var versionField = versionFields[0];
+            // idField必须用private修饰
+            AssertionUtils.isTrue(Modifier.isPrivate(versionField.getModifiers()), "The version of the Entity[{}] must be private", clazz.getSimpleName());
+            AssertionUtils.isTrue(versionField.getType().equals(long.class), "The version type of the Entity[{}] must be long", clazz.getSimpleName());
         }
-
-        var gvsMethod = gvsMethodOptional.get();
-        var svsMethod = svsMethodOptional.get();
-        var vsValue = RandomUtils.randomLong();
-        ReflectionUtils.invokeMethod(entityInstance, svsMethod, vsValue);
-        var gvsReturnValue = ReflectionUtils.invokeMethod(entityInstance, gvsMethod);
-        // 实体类Entity的gvs方法和svs方法定义格式不正确
-        AssertionUtils.isTrue(gvsReturnValue.equals(vsValue), "The gvs and svs methods of the Entity[{}] are not correctly", clazz.getSimpleName());
     }
 
     private static final Set<Class<?>> unsafeCollections = Set.of(List.class, ArrayList.class, LinkedList.class

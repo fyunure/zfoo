@@ -21,8 +21,8 @@ import com.zfoo.orm.model.IEntity;
 public class MongodbQuery implements IQuery {
 
     @Override
-    public <E extends IEntity<?>> IQueryBuilder<E> builder(Class<E> entityClazz) {
-        return new MongoQueryBuilder<E>(entityClazz);
+    public <PK extends Comparable<PK>, E extends IEntity<PK>> IQueryBuilder<PK, E> builder(Class<E> entityClazz) {
+        return new MongoQueryBuilder<PK, E>(entityClazz);
     }
 
 }
